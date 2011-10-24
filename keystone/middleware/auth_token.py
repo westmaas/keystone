@@ -143,8 +143,8 @@ class AuthProtocol(object):
                 return self._reject_request(env, start_response)
         else:
             # this request is presenting claims. Let's validate them
-            valid = self._validate_claims(claims)
-            if not valid:
+            token = self._validate_claims(claims)
+            if token is None:
                 # Keystone rejected claim
                 if self.delay_auth_decision:
                     # Downstream service will receive call still and decide
@@ -156,10 +156,8 @@ class AuthProtocol(object):
             else:
                 self._decorate_request("X_IDENTITY_STATUS",
                     "Confirmed", env, proxy_headers)
-
-            #Collect information about valid claims
-            if valid:
-                claims = self._expound_claims(claims)
+                #Collect information about valid claims
+                claims = self._expound_claims(claims, token)
 
                 # Store authentication data
                 if claims:
@@ -249,39 +247,19 @@ class AuthProtocol(object):
         conn = http_connect(self.auth_host, self.auth_port, 'GET',
                             '/v2.0/tokens/%s' % claims, headers=headers)
         resp = conn.getresponse()
-        # data = resp.read()
-        conn.close()
-
-        if not str(resp.status).startswith('20'):
-            # Keystone rejected claim
-            return False
-        else:
-            #TODO(Ziad): there is an optimization we can do here. We have just
-            #received data from Keystone that we can use instead of making
-            #another call in _expound_claims
-            return True
-
-    def _expound_claims(self, claims):
-        # Valid token. Get user data and put it in to the call
-        # so the downstream service can use it
-        headers = {"Content-type": "application/json",
-                    "Accept": "application/json",
-                    "X-Auth-Token": self.admin_token}
-                    ##TODO(ziad):we need to figure out how to auth to keystone
-                    #since validate_token is a priviledged call
-                    #Khaled's version uses creds to get a token
-                    # "X-Auth-Token": admin_token}
-                    # we're using a test token from the ini file for now
-        conn = http_connect(self.auth_host, self.auth_port, 'GET',
-                            '/v2.0/tokens/%s' % claims, headers=headers)
-        resp = conn.getresponse()
         data = resp.read()
         conn.close()
 
         if not str(resp.status).startswith('20'):
-            raise LookupError('Unable to locate claims: %s' % resp.status)
+            # Keystone rejected claim
+            return None
+        else:
+            token_info = json.loads(data)
+            return token_info 
 
-        token_info = json.loads(data)
+    def _expound_claims(self, claims, token_info):
+        # Valid token. Get user data and put it in to the call
+        # so the downstream service can use it
         roles = []
         role_refs = token_info["access"]["user"]["roles"]
         if role_refs != None:
